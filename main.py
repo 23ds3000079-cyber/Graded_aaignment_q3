@@ -1,35 +1,34 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import sys
 from io import StringIO
 import traceback
+import os
 
 from google import genai
 from google.genai import types
 
-# =========================
-# FastAPI App
-# =========================
 app = FastAPI()
 
-# =========================
-# Request Schema
-# =========================
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class CodeRequest(BaseModel):
     code: str
 
-# =========================
-# Response Schema
-# =========================
 class CodeResponse(BaseModel):
     error: List[int]
     result: str
 
 
-# =========================
-# Tool Function
-# =========================
 def execute_python_code(code: str) -> dict:
     old_stdout = sys.stdout
     sys.stdout = StringIO()
@@ -47,20 +46,14 @@ def execute_python_code(code: str) -> dict:
         sys.stdout = old_stdout
 
 
-# =========================
-# AI Structured Output Model
-# =========================
 class ErrorAnalysis(BaseModel):
     error_lines: List[int]
 
 
-# =========================
-# Gemini Error Analyzer
-# =========================
 def analyze_error_with_ai(code: str, traceback_text: str) -> List[int]:
 
     client = genai.Client(
-        api_key="AIzaSyCt3fcMslCKU169JjkZWLf58fRdVyqUq0w"
+        api_key=os.environ.get("GEMINI_API_KEY")
     )
 
     prompt = f"""
@@ -99,28 +92,21 @@ Return ONLY JSON:
     return parsed.error_lines
 
 
-# =========================
-# API Endpoint
-# =========================
 @app.post("/code-interpreter", response_model=CodeResponse)
 def run_code(req: CodeRequest):
 
     execution = execute_python_code(req.code)
 
-    # If success → return output directly
     if execution["success"]:
-        return {
-            "error": [],
-            "result": execution["output"]
-        }
+        return {"error": [], "result": execution["output"]}
 
-    # If error → analyze with AI
-    error_lines = analyze_error_with_ai(
-        req.code,
-        execution["output"]
-    )
+    error_lines = analyze_error_with_ai(req.code, execution["output"])
 
-    return {
-        "error": error_lines,
-        "result": execution["output"]
-    }
+    return {"error": error_lines, "result": execution["output"]}
+
+
+# REQUIRED FOR RENDER
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
